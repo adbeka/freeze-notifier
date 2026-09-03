@@ -37,9 +37,35 @@ if not exist local.env.bat (
 call local.env.bat
 set FREEZE_DB_PATH=%~dp0freeze.db
 
+set CERT_FILE=%~dp0certs\cert.pem
+set KEY_FILE=%~dp0certs\key.pem
+
+if exist "%CERT_FILE%" if exist "%KEY_FILE%" goto :run_tls
+goto :run_http
+
+:run_tls
 echo.
 echo ================================================================
-echo Server starting at http://127.0.0.1:8000
+echo Server starting with TLS at https://0.0.0.0:8443
+echo.
+echo   Admin (IT, create freeze windows):   https://YOUR-SERVER-HOSTNAME:8443/admin/
+echo     X-API-Key: %FREEZE_API_KEY%
+echo.
+echo   Status page (engineer view):         https://YOUR-SERVER-HOSTNAME:8443/status/?segment=dept-ro
+echo ================================================================
+echo.
+echo Stop the server: Ctrl+C in this window.
+echo.
+uvicorn app.main:app --host 0.0.0.0 --port 8443 --ssl-certfile "%CERT_FILE%" --ssl-keyfile "%KEY_FILE%"
+goto :end
+
+:run_http
+echo.
+echo ================================================================
+echo No TLS cert found in certs\ - starting plain HTTP at http://127.0.0.1:8000
+echo For multi-user deployment, generate a cert first (see README.md):
+echo   venv\Scripts\python generate_cert.py YOUR-SERVER-HOSTNAME
+echo ================================================================
 echo.
 echo   Admin (IT, create freeze windows):   http://127.0.0.1:8000/admin/
 echo     X-API-Key: %FREEZE_API_KEY%
@@ -49,6 +75,7 @@ echo ================================================================
 echo.
 echo Stop the server: Ctrl+C in this window.
 echo.
-
 uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+:end
 pause

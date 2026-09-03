@@ -88,6 +88,68 @@ FREEZE_API_KEY=<секрет-для-записи> uvicorn app.main:app --host 0.
 - `GET /api/acks?window_id=...` — список подтверждений, требует
   `X-API-Key`.
 
+## Многопользовательский запуск (несколько человек одновременно)
+
+Нагрузочный тест ([loadtest.py](loadtest.py)) подтвердил: после настройки
+пула соединений в [database.py](app/database.py) сервер держит тысячи
+одновременных запросов без отказов. Остаётся сама механика развёртывания —
+всё ниже нужно на **выделенной внутренней Windows-машине**, не на чьём-то
+личном ноутбуке.
+
+### 1. TLS-сертификат (самоподписанный, для быстрого старта)
+
+```bash
+venv\Scripts\python generate_cert.py YOUR-SERVER-HOSTNAME
+```
+
+Создаёт `certs\cert.pem` и `certs\key.pem` (`certs/` в `.gitignore` —
+приватный ключ никогда не должен попасть в git). `run.bat` и
+`run-service.bat` сами подхватывают TLS на `:8443`, если файлы на месте;
+без них — обычный HTTP на `:8000`, как раньше.
+
+Самоподписанный сертификат не в доверенных у клиентов "из коробки" — на
+каждой рабочей машине браузер будет показывать предупреждение, пока
+сертификат не добавлен в доверенные (см. шаг 4). Для реальной
+эксплуатации лучше заменить на сертификат, выпущенный внутренним CA
+компании — тогда шаг 4 не нужен, GPO уже доверяет корневому CA.
+
+### 2. Открыть порт в брандмауэре (на сервере, PowerShell от администратора)
+
+```powershell
+New-NetFirewallRule -DisplayName "Freeze Notifier" -Direction Inbound -Protocol TCP -LocalPort 8443 -Action Allow
+```
+
+(порт `8000`, если без TLS.)
+
+### 3. Автозапуск при загрузке + автоперезапуск при сбое
+
+Шаблон задачи — [deploy/FreezeNotifier.task.xml](deploy/FreezeNotifier.task.xml).
+Перед импортом впишите в него реальный путь к `run-service.bat` (сейчас
+там `C:\PATH\TO\backend\run-service.bat`), затем на сервере (PowerShell от
+администратора):
+
+```powershell
+schtasks /Create /XML "C:\path\to\backend\deploy\FreezeNotifier.task.xml" /TN "FreezeNotifier"
+```
+
+`run-service.bat` — версия `run.bat` без `pause` и без переустановки
+зависимостей при каждом запуске: сначала один раз вручную выполните
+`run.bat`, чтобы создать `venv\` и `local.env.bat`, и только потом
+регистрируйте задачу.
+
+### 4. Доверить сертификат на рабочих машинах инженеров (только для самоподписанного)
+
+На каждой клиентской машине (или централизованно через GPO,
+`Computer Configuration → Windows Settings → Security Settings →
+Public Key Policies → Trusted Root Certification Authorities`):
+
+```powershell
+Import-Certificate -FilePath "\\fileserver\it\cert.pem" -CertStoreLocation Cert:\LocalMachine\Root
+```
+
+Если вместо этого получится сертификат от внутреннего CA компании — этот
+шаг не нужен, машины в домене уже доверяют корневому CA.
+
 ## Что стоит сделать перед реальной эксплуатацией
 
 - Заменить `X-API-Key` на интеграцию с AD/LDAP или Windows Integrated

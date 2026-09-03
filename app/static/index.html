@@ -18,6 +18,7 @@
   button { padding: 6px 12px; cursor: pointer; }
   .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 1rem; }
   .err { color: #b00020; font-size: 0.85rem; }
+  .hint { color: #666; font-size: 0.8rem; }
   .del-btn { color: #b00020; background: none; border: none; cursor: pointer; text-decoration: underline; }
   .segments-box { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 6px 0; }
   .segments-box label { flex-direction: row !important; align-items: center; gap: 6px !important; font-size: 0.95rem !important; }
@@ -58,6 +59,7 @@
   <label>Конец
     <input id="endTime" type="datetime-local">
   </label>
+  <div class="full-row hint" id="tzHint"></div>
   <label class="full-row">Комментарий
     <textarea id="comment" rows="2" placeholder="Причина / номер заявки на изменение"></textarea>
   </label>
@@ -100,6 +102,18 @@ function setCheckedSegments(segments) {
   });
 }
 
+function tzLabel() {
+  const offsetMin = -new Date().getTimezoneOffset();
+  const sign = offsetMin >= 0 ? "+" : "-";
+  const abs = Math.abs(offsetMin);
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  return `UTC${sign}${h}${m ? ":" + String(m).padStart(2, "0") : ""}`;
+}
+document.getElementById("tzHint").textContent =
+  `Начало/конец указываются в часовом поясе этого браузера (${tzLabel()}). ` +
+  `Инженеры увидят то же самое время, пересчитанное в их собственный часовой пояс.`;
+
 const API_KEY_STORAGE = "freeze_admin_api_key";
 document.getElementById("apiKey").value = localStorage.getItem(API_KEY_STORAGE) || "";
 document.getElementById("apiKey").addEventListener("change", (e) => {
@@ -139,8 +153,8 @@ async function loadWindows() {
     // выполнялось в браузере другого администратора, который откроет список.
     addCell(tr, w.scope_type === "full" ? "Полный" : "Частичный");
     addCell(tr, w.segments.join(", ") || "—");
-    addCell(tr, start.toLocaleString());
-    addCell(tr, end.toLocaleString());
+    addCell(tr, start.toLocaleString([], { hour12: false }));
+    addCell(tr, end.toLocaleString([], { hour12: false }));
     addCell(tr, w.comment || "");
     addCell(tr, w.created_by || "");
 

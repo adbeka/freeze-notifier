@@ -151,7 +151,7 @@ enableNotifBtn.addEventListener("click", () => {
 });
 
 function formatTime(iso) {
-  try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+  try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }); }
   catch { return "?"; }
 }
 
@@ -186,7 +186,7 @@ ackBtn.addEventListener("click", async () => {
     if (!res.ok) throw new Error("status " + res.status);
     ackedWindowIds.add(currentActiveWindowId);
     saveAckedIds();
-    ackStatusEl.textContent = "Подтверждено в " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    ackStatusEl.textContent = "Подтверждено в " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   } catch (e) {
     ackBtn.disabled = false;
     ackStatusEl.textContent = "Не удалось отправить подтверждение, попробуйте ещё раз";
@@ -234,7 +234,7 @@ async function poll() {
     document.body.className = "";
     setFavicon("#2e7d32");
     titleEl.textContent = "Запретов нет";
-    detailEl.textContent = "Последняя проверка: " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    detailEl.textContent = "Последняя проверка: " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
     document.title = "🟢 статус сети";
     ackBox.classList.remove("visible");
     previousMode = "none";

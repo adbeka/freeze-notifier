@@ -4,3 +4,4 @@ __pycache__/
 freeze.db
 local.env.bat
 server.log
+certs/
