@@ -13,6 +13,8 @@ from .models import (
     FreezeAckIn,
     FreezeAckOut,
     FreezeWindow,
+    FreezeWindowAudit,
+    FreezeWindowAuditOut,
     FreezeWindowIn,
     FreezeWindowOut,
     StatusResponse,
@@ -48,6 +50,20 @@ def _overlaps_segment(window: FreezeWindow, segment: Optional[str]) -> bool:
     if segment is None:
         return True
     return segment in window.segments
+
+
+def _record_audit(session: Session, w: FreezeWindow, action: str, performed_by: str) -> None:
+    session.add(FreezeWindowAudit(
+        window_id=w.id,
+        action=action,
+        scope_type=w.scope_type,
+        segments_raw=w.segments_raw,
+        start_time=w.start_time,
+        end_time=w.end_time,
+        comment=w.comment,
+        performed_by=performed_by,
+    ))
+    session.commit()
 
 
 @app.get("/api/status", response_model=StatusResponse)
@@ -102,6 +118,7 @@ def create_window(payload: FreezeWindowIn, session: Session = Depends(get_sessio
     session.add(w)
     session.commit()
     session.refresh(w)
+    _record_audit(session, w, "created", payload.created_by)
     return FreezeWindowOut.from_db(w)
 
 
@@ -122,14 +139,16 @@ def update_window(window_id: int, payload: FreezeWindowIn, session: Session = De
     session.add(w)
     session.commit()
     session.refresh(w)
+    _record_audit(session, w, "updated", payload.created_by)
     return FreezeWindowOut.from_db(w)
 
 
 @app.delete("/api/windows/{window_id}", status_code=204, dependencies=[Depends(require_api_key)])
-def delete_window(window_id: int, session: Session = Depends(get_session)):
+def delete_window(window_id: int, deleted_by: str = "", session: Session = Depends(get_session)):
     w = session.get(FreezeWindow, window_id)
     if w is None:
         raise HTTPException(status_code=404, detail="window not found")
+    _record_audit(session, w, "deleted", deleted_by)
     session.delete(w)
     session.commit()
 
@@ -161,6 +180,15 @@ def list_acks(window_id: Optional[int] = None, session: Session = Depends(get_se
         query = query.where(FreezeAck.window_id == window_id)
     acks = session.exec(query).all()
     return [FreezeAckOut.from_db(a) for a in acks]
+
+
+@app.get("/api/audit", response_model=list[FreezeWindowAuditOut], dependencies=[Depends(require_api_key)])
+def list_audit(window_id: Optional[int] = None, session: Session = Depends(get_session)):
+    query = select(FreezeWindowAudit).order_by(FreezeWindowAudit.performed_at.desc())
+    if window_id is not None:
+        query = query.where(FreezeWindowAudit.window_id == window_id)
+    entries = session.exec(query).all()
+    return [FreezeWindowAuditOut.from_db(e) for e in entries]
 
 
 app.mount("/admin", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True), name="admin")

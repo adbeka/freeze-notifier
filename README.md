@@ -87,6 +87,23 @@ FREEZE_API_KEY=<секрет-для-записи> uvicorn app.main:app --host 0.
   административное действие). Требует существующий `window_id`.
 - `GET /api/acks?window_id=...` — список подтверждений, требует
   `X-API-Key`.
+- `GET /api/audit?window_id=...` — журнал изменений окон запрета
+  (создание/изменение/удаление, кем и когда), требует `X-API-Key`. Кнопка
+  "Журнал изменений" в `/admin/` показывает то же самое в виде таблицы.
+  Как и `created_by`/`acknowledged_by`, поле "кем" — самоотчёт из текстового
+  поля, не проверяется сервером против реальной личности.
+
+## Логи
+
+- **Аудит окон запрета** (`/api/audit`) и **подтверждения инженеров**
+  (`/api/acks`) — в `freeze.db`, переживают перезапуск сервера, ничего
+  вручную ротировать не нужно (это данные, не файлы).
+- **Технические логи сервера** (`run-service.bat`, для запуска через
+  Планировщик заданий) — в `logs\YYYY-MM-DD.log`, один файл на день. Старые
+  файлы никуда не удаляются автоматически — почистить их вручную или
+  настроить отдельную задачу в Планировщике, если это станет проблемой
+  места на диске. `run.bat` (ручной/dev-запуск) логи в файл не пишет —
+  вывод и так виден в открытом окне консоли.
 
 ## Многопользовательский запуск (несколько человек одновременно)
 
@@ -123,13 +140,15 @@ New-NetFirewallRule -DisplayName "Freeze Notifier" -Direction Inbound -Protocol 
 
 ### 3. Автозапуск при загрузке + автоперезапуск при сбое
 
-Шаблон задачи — [deploy/FreezeNotifier.task.xml](deploy/FreezeNotifier.task.xml).
-Перед импортом впишите в него реальный путь к `run-service.bat` (сейчас
-там `C:\PATH\TO\backend\run-service.bat`), затем на сервере (PowerShell от
-администратора):
+Шаблон задачи — [deploy/FreezeNotifier.task.xml](deploy/FreezeNotifier.task.xml)
+(с плейсхолдером `C:\PATH\TO\backend`, он в git, для переносимости).
+Скопируйте его в `deploy\FreezeNotifier.local.xml` (это имя в `.gitignore`
+— реальный путь на конкретном сервере в git не идёт, как и `local.env.bat`)
+и впишите туда настоящий путь к `run-service.bat` и рабочей папке. Затем
+на сервере (PowerShell от администратора):
 
 ```powershell
-schtasks /Create /XML "C:\path\to\backend\deploy\FreezeNotifier.task.xml" /TN "FreezeNotifier"
+schtasks /Create /XML "C:\path\to\backend\deploy\FreezeNotifier.local.xml" /TN "FreezeNotifier"
 ```
 
 `run-service.bat` — версия `run.bat` без `pause` и без переустановки

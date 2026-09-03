@@ -5,3 +5,5 @@ freeze.db
 local.env.bat
 server.log
 certs/
+logs/
+deploy/*.local.xml

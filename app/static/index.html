@@ -64,14 +64,22 @@
     <textarea id="comment" rows="2" placeholder="Причина / номер заявки на изменение"></textarea>
   </label>
   <label>Автор
-    <input id="createdBy" placeholder="ваше имя">
+    <input id="createdBy" placeholder="ваше имя" required>
   </label>
   <div class="full-row">
     <button type="submit">Сохранить окно</button>
     <button type="button" id="cancelEdit" style="display:none">Отменить редактирование</button>
+    <button type="button" id="showAuditBtn">Журнал изменений</button>
     <span class="err" id="formErr"></span>
   </div>
 </form>
+
+<table id="auditTable" style="display:none">
+  <thead>
+    <tr><th>Когда</th><th>Действие</th><th>Окно #</th><th>Тип</th><th>Сегменты</th><th>Начало</th><th>Конец</th><th>Кем</th></tr>
+  </thead>
+  <tbody id="auditBody"></tbody>
+</table>
 
 <script>
 // Реальные сегменты/подразделения сети - держите этот список в актуальном
@@ -202,7 +210,8 @@ document.getElementById("cancelEdit").addEventListener("click", resetForm);
 
 async function deleteWindow(id) {
   if (!confirm("Удалить это окно запрета?")) return;
-  const res = await fetch(`/api/windows/${id}`, {
+  const deletedBy = prompt("Ваше имя (для журнала изменений):", document.getElementById("createdBy").value) || "";
+  const res = await fetch(`/api/windows/${id}?deleted_by=${encodeURIComponent(deletedBy)}`, {
     method: "DELETE",
     headers: { "X-API-Key": apiKey() },
   });
@@ -259,6 +268,36 @@ document.getElementById("windowForm").addEventListener("submit", async (e) => {
 
   resetForm();
   loadWindows();
+});
+
+const ACTION_LABELS = { created: "создано", updated: "изменено", deleted: "удалено" };
+
+async function loadAudit() {
+  const res = await fetch("/api/audit", { headers: { "X-API-Key": apiKey() } });
+  if (!res.ok) { alert("Ошибка загрузки журнала: " + res.status + " (проверьте API key)"); return; }
+  const entries = await res.json();
+  const body = document.getElementById("auditBody");
+  body.innerHTML = "";
+  for (const e of entries) {
+    const tr = document.createElement("tr");
+    addCell(tr, new Date(e.performed_at).toLocaleString([], { hour12: false }));
+    addCell(tr, ACTION_LABELS[e.action] || e.action);
+    addCell(tr, String(e.window_id));
+    addCell(tr, e.scope_type === "full" ? "Полный" : "Частичный");
+    addCell(tr, e.segments.join(", ") || "—");
+    addCell(tr, new Date(e.start_time).toLocaleString([], { hour12: false }));
+    addCell(tr, new Date(e.end_time).toLocaleString([], { hour12: false }));
+    addCell(tr, e.performed_by || "(не указано)");
+    body.appendChild(tr);
+  }
+}
+
+const auditTable = document.getElementById("auditTable");
+document.getElementById("showAuditBtn").addEventListener("click", async () => {
+  const showing = auditTable.style.display !== "none";
+  if (showing) { auditTable.style.display = "none"; return; }
+  await loadAudit();
+  auditTable.style.display = "";
 });
 
 document.getElementById("refreshBtn").addEventListener("click", loadWindows);

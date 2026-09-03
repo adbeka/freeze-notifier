@@ -85,6 +85,55 @@ class FreezeWindowOut(BaseModel):
         )
 
 
+class FreezeWindowAudit(SQLModel, table=True):
+    """Append-only history of admin changes to freeze windows. Without this,
+    PUT silently overwrites the live row and DELETE removes it outright -
+    there would be no record of who changed or removed a window, or what it
+    said before that."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    window_id: int
+    action: str  # "created" | "updated" | "deleted"
+    scope_type: str
+    segments_raw: str = ""
+    start_time: datetime
+    end_time: datetime
+    comment: str = ""
+    performed_by: str = ""
+    performed_at: datetime = Field(default_factory=datetime.utcnow)
+
+    @property
+    def segments(self) -> list[str]:
+        return [s for s in self.segments_raw.split(",") if s]
+
+
+class FreezeWindowAuditOut(BaseModel):
+    id: int
+    window_id: int
+    action: str
+    scope_type: str
+    segments: list[str]
+    start_time: datetime
+    end_time: datetime
+    comment: str
+    performed_by: str
+    performed_at: datetime
+
+    @classmethod
+    def from_db(cls, a: "FreezeWindowAudit") -> "FreezeWindowAuditOut":
+        return cls(
+            id=a.id,
+            window_id=a.window_id,
+            action=a.action,
+            scope_type=a.scope_type,
+            segments=a.segments,
+            start_time=a.start_time.replace(tzinfo=timezone.utc),
+            end_time=a.end_time.replace(tzinfo=timezone.utc),
+            comment=a.comment,
+            performed_by=a.performed_by,
+            performed_at=a.performed_at.replace(tzinfo=timezone.utc),
+        )
+
+
 class StatusResponse(BaseModel):
     server_time: datetime
     active: bool
