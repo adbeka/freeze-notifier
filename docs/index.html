@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Freeze Notifier — обзор проекта</title>
+<meta name="description" content="Архитектура, компоненты, надёжность и финансовая модель внутреннего сервиса уведомлений о заморозке сети.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;900&family=PT+Serif:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    color-scheme: light dark;
+    --bg:#F3F6F7; --surface:#FFFFFF; --surface-2:#EAF1F3;
+    --ink:#16222B; --ink-soft:#526672; --border:#D6E0E3;
+    --accent:#1C7C93; --accent-ink:#0E4B59; --accent-soft:#E1F1F4;
+    --ok:#2E7D32; --crit:#B0221F; --warn:#9C6B05;
+    --shadow: 0 1px 2px rgba(22,34,43,.06), 0 8px 24px -12px rgba(22,34,43,.12);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0E161C; --surface:#16212A; --surface-2:#1B2A33;
+      --ink:#E7EEF1; --ink-soft:#93A7B0; --border:#26363F;
+      --accent:#5FC9DC; --accent-ink:#CFF1F7; --accent-soft:#16323A;
+      --ok:#5FBE71; --crit:#E5726E; --warn:#D9A441;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0E161C; --surface:#16212A; --surface-2:#1B2A33;
+    --ink:#E7EEF1; --ink-soft:#93A7B0; --border:#26363F;
+    --accent:#5FC9DC; --accent-ink:#CFF1F7; --accent-soft:#16323A;
+    --ok:#5FBE71; --crit:#E5726E; --warn:#D9A441;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  img{ max-width:100%; }
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:'PT Serif', Georgia, 'Times New Roman', serif;
+    font-size:17px; line-height:1.65;
+  }
+  h1,h2,h3,.eyebrow,.label,.chip,.stat-label,nav,button{
+    font-family:'Golos Text','Segoe UI',system-ui,sans-serif;
+  }
+  code,.mono,.value-mono{
+    font-family:'JetBrains Mono',ui-monospace,Consolas,monospace;
+  }
+
+  .page{ max-width:780px; margin:0 auto; padding:4.5rem 1.5rem 6rem; }
+
+  .eyebrow{
+    font-size:.78rem; font-weight:700; letter-spacing:.11em; text-transform:uppercase;
+    color:var(--accent-ink); background:var(--accent-soft);
+    display:inline-block; padding:.3rem .7rem; border-radius:3px;
+  }
+  h1{
+    font-size:2.6rem; font-weight:900; letter-spacing:-.01em;
+    margin:.6rem 0 .5rem; text-wrap:balance; color:var(--ink);
+  }
+  .dek{
+    font-size:1.15rem; color:var(--ink-soft); max-width:56ch;
+    margin:0 0 1.75rem; text-wrap:balance;
+  }
+
+  .facts{
+    display:grid; grid-template-columns:repeat(4,1fr); gap:1px;
+    background:var(--border); border:1px solid var(--border); border-radius:8px;
+    overflow:hidden; margin-bottom:3rem; box-shadow:var(--shadow);
+  }
+  .fact{ background:var(--surface); padding:1rem 1.1rem; }
+  .fact .stat-label{
+    font-size:.68rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--ink-soft); margin-bottom:.35rem;
+  }
+  .fact .stat-value{ font-size:1.05rem; font-weight:600; line-height:1.3; }
+  .fact .stat-value.mono{ font-size:.92rem; font-weight:500; }
+
+  section{ margin:3rem 0; }
+  h2{
+    font-size:1.5rem; font-weight:700; margin:0 0 1rem; text-wrap:balance;
+    padding-bottom:.6rem; border-bottom:2px solid var(--border);
+  }
+  h3{ font-size:1.05rem; font-weight:600; margin:1.5rem 0 .6rem; }
+  p{ margin:0 0 1.1rem; max-width:66ch; }
+  p:last-child{ margin-bottom:0; }
+  strong{ font-weight:700; }
+  a{ color:var(--accent-ink); text-decoration-color:var(--accent); text-underline-offset:.15em; }
+
+  ul.plain{ margin:0 0 1.1rem; padding-left:1.3rem; }
+  ul.plain li{ margin-bottom:.45rem; max-width:64ch; }
+
+  .callout{
+    background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--accent);
+    border-radius:6px; padding:1rem 1.2rem; box-shadow:var(--shadow);
+    font-size:.97rem;
+  }
+  .callout p{ margin-bottom:.6rem; }
+  .callout p:last-child{ margin-bottom:0; }
+
+  figure{ margin:1.5rem 0; }
+  .diagram-frame{
+    background:var(--surface); border:1px solid var(--border); border-radius:8px;
+    padding:1.2rem 1rem .6rem; box-shadow:var(--shadow);
+  }
+  svg{ display:block; width:100%; height:auto; color:var(--ink); }
+  figcaption{
+    font-family:'Golos Text',sans-serif; font-size:.85rem; color:var(--ink-soft);
+    margin-top:.7rem; max-width:60ch;
+  }
+
+  table{ width:100%; border-collapse:collapse; font-size:.94rem; }
+  .table-wrap{ overflow-x:auto; border:1px solid var(--border); border-radius:8px; box-shadow:var(--shadow); }
+  th,td{ text-align:left; padding:.65rem .8rem; border-bottom:1px solid var(--border); vertical-align:top; }
+  thead th{
+    font-family:'Golos Text',sans-serif; font-size:.72rem; font-weight:700;
+    letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft);
+    background:var(--surface-2); border-bottom:1px solid var(--border);
+  }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody{ background:var(--surface); }
+  td.mono, th.mono{ font-family:'JetBrains Mono',monospace; font-size:.85rem; }
+  td.num{ font-variant-numeric:tabular-nums; }
+
+  .checklist{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1px;
+    background:var(--border); border:1px solid var(--border); border-radius:8px; overflow:hidden; box-shadow:var(--shadow);}
+  .checklist li{
+    background:var(--surface); padding:.85rem 1rem; display:flex; align-items:baseline; gap:.7rem;
+  }
+  .check-mark{
+    font-family:'Golos Text',sans-serif; font-size:.7rem; font-weight:700;
+    letter-spacing:.04em; text-transform:uppercase; flex:0 0 auto;
+    padding:.15rem .5rem; border-radius:3px; line-height:1.5;
+  }
+  .check-mark.done{ background:var(--accent-soft); color:var(--accent-ink); }
+  .check-mark.todo{ background:var(--surface-2); color:var(--ink-soft); }
+  .checklist .txt{ flex:1; }
+  .checklist .txt b{ display:block; font-family:'Golos Text',sans-serif; font-weight:600; font-size:.95rem; margin-bottom:.15rem; }
+  .checklist .txt span{ color:var(--ink-soft); font-size:.9rem; }
+
+  .pill-row{ display:flex; flex-wrap:wrap; gap:.5rem; margin:1rem 0 0; }
+  .pill{
+    font-family:'Golos Text',sans-serif; font-size:.8rem; font-weight:600;
+    padding:.3rem .65rem; border-radius:20px; border:1px solid var(--border); color:var(--ink-soft);
+  }
+
+  footer{
+    margin-top:4rem; padding-top:1.5rem; border-top:1px solid var(--border);
+    font-family:'Golos Text',sans-serif; font-size:.85rem; color:var(--ink-soft);
+    display:flex; justify-content:space-between; flex-wrap:wrap; gap:.5rem;
+  }
+
+  @media (max-width:640px){
+    .facts{ grid-template-columns:repeat(2,1fr); }
+    h1{ font-size:2.1rem; }
+    .page{ padding:3rem 1.1rem 4rem; }
+  }
+</style>
+</head>
+<body>
+
+<article class="page">
+
+  <header>
+    <span class="eyebrow">Внутренний ИТ-инструмент · обзор проекта</span>
+    <h1>Freeze Notifier</h1>
+    <p class="dek">Единая точка правды о том, когда в сети действует запрет на изменения конфигураций — и доказательство того, что каждый инженер это видел, а не просто «баннер где-то показывался».</p>
+  </header>
+
+  <div class="facts">
+    <div class="fact">
+      <div class="stat-label">Стек</div>
+      <div class="stat-value mono">FastAPI · SQLite · uvicorn</div>
+    </div>
+    <div class="fact">
+      <div class="stat-label">Поверхность атаки</div>
+      <div class="stat-value">Без exe, без облака, без расширения браузера</div>
+    </div>
+    <div class="fact">
+      <div class="stat-label">Развёртывание</div>
+      <div class="stat-value">Внутри периметра компании</div>
+    </div>
+    <div class="fact">
+      <div class="stat-label">Лицензии ПО</div>
+      <div class="stat-value">$0 — весь стек open-source</div>
+    </div>
+  </div>
+
+  <section>
+    <h2>Задача и её история</h2>
+    <p>Первая версия была рабочей SPA-панелью на <strong>Railway</strong> (облачный PaaS) с Windows-агентом в виде неподписанного <code>.exe</code> и браузерным расширением, которое DOM-инъекцией рисовало баннер поверх вендорской SDN-панели. Служба безопасности компании отклонила её по трём конкретным пунктам:</p>
+    <ul class="plain">
+      <li>данные о расписании запретов уходили на сторонний облачный сервис;</li>
+      <li>неподписанный исполняемый файл на рабочих станциях инженеров;</li>
+      <li>браузерное расширение с DOM-инъекцией в интерфейс стороннего вендора.</li>
+    </ul>
+    <p>Freeze Notifier — редизайн, который убирает все три поверхности одновременно: сервер переехал внутрь периметра компании, агента на рабочей станции нет вообще, страница статуса — обычная веб-страница в уже разрешённом браузере, без расширений и инъекций.</p>
+  </section>
+
+  <section>
+    <h2>Как это работает</h2>
+    <p>ИТ-администратор объявляет «окно запрета» — период, когда менять конфигурацию сети нельзя, — на всю сеть целиком или на отдельные сегменты (<code class="mono">dept-ro</code>, <code class="mono">dc-almaty</code>, <code class="mono">core-network</code>). Каждый инженер держит открытой страницу статуса своего сегмента: пока запрета нет — зелёный экран, как только окно наступает — весь экран становится красным, мигает, проигрывает звук и присылает системное уведомление, даже если вкладка свёрнута.</p>
+    <p>Инженер подтверждает, что видел предупреждение, кнопкой «Понял(а)» — это не формальность: подтверждение с именем и временем уходит на сервер и остаётся в журнале, доступном ИТ. Если сервер вдруг недоступен, страница честно показывает жёлтое предупреждение «статус не подтверждён» — недоступность никогда не маскируется под «запретов нет».</p>
+  </section>
+
+  <section>
+    <h2>Архитектура</h2>
+    <figure>
+      <div class="diagram-frame">
+        <svg viewBox="0 0 760 330" role="img" aria-label="Топология: браузер администратора и браузеры инженеров обращаются только к центральному FastAPI-серверу, который читает и пишет в SQLite; клиенты друг с другом напрямую не связаны.">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <rect x="24" y="24" width="180" height="56" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="114" y="47" text-anchor="middle" font-family="Golos Text, sans-serif" font-size="13" font-weight="600" fill="currentColor">Админ</text>
+          <text x="114" y="65" text-anchor="middle" font-family="Golos Text, sans-serif" font-size="11" fill="currentColor" opacity=".65">браузер, /admin/</text>
+
+          <rect x="290" y="128" width="180" height="64" rx="6" fill="none" stroke="var(--accent)" stroke-width="2.2"/>
+          <text x="380" y="154" text-anchor="middle" font-family="Golos Text, sans-serif" font-size="13" font-weight="700" fill="var(--accent)">FastAPI-сервер</text>
+          <text x="380" y="172" text-anchor="middle" font-family="Golos Text, sans-serif" font-size="11" fill="var(--accent)" opacity=".8">один процесс, uvicorn</text>
+
+          <rect x="330" y="248" width="120" height="52" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="390" y="270" text-anchor="middle" font-family="Golos Text, sans-serif" font-size="12" font-weight="600" fill="currentColor">SQLite</text>
+          <text x="390" y="286" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="currentColor" opacity=".65">freeze.db</text>
+
+          <rect x="566" y="70" width="170" height="52" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <rect x="576" y="60" width="170" height="52" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <rect x="586" y="50" width="170" height="52" rx="6" fill="var(--surface)" stroke="currentColor" stroke-width="1.4"/>
+          <text x="671" y="72" text-anchor="middle" font-family="Golos Text, sans-serif" font-size="13" font-weight="600" fill="currentColor">Инженеры</text>
+          <text x="671" y="90" text-anchor="middle" font-family="Golos Text, sans-serif" font-size="11" fill="currentColor" opacity=".65">×N, /status/, независимо</text>
+
+          <path d="M120,80 C120,150 260,150 288,158" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrow)"/>
+          <text x="140" y="118" font-family="JetBrains Mono, monospace" font-size="10.5" fill="currentColor">POST /api/windows</text>
+          <text x="140" y="131" font-family="JetBrains Mono, monospace" font-size="10.5" fill="currentColor" opacity=".65">X-API-Key</text>
+
+          <path d="M383,192 L385,246" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrow)"/>
+          <path d="M400,246 L398,192" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrow)"/>
+          <text x="415" y="222" font-family="JetBrains Mono, monospace" font-size="10.5" fill="currentColor" opacity=".7">чтение/запись</text>
+
+          <path d="M472,150 C540,120 560,100 585,84" fill="none" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#arrow)"/>
+          <text x="478" y="112" font-family="JetBrains Mono, monospace" font-size="10.5" fill="var(--accent)">GET /api/status</text>
+          <text x="478" y="125" font-family="JetBrains Mono, monospace" font-size="10.5" fill="var(--accent)" opacity=".8">раз в ~15с ±4с джиттер</text>
+
+          <path d="M600,104 C540,150 520,155 472,166" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrow)"/>
+          <text x="500" y="205" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="10.5" fill="currentColor" opacity=".7">POST /api/ack</text>
+
+          <text x="24" y="320" font-family="Golos Text, sans-serif" font-size="10.5" fill="currentColor" opacity=".55">Ни одной прямой связи между браузерами — все обмены проходят только через сервер.</text>
+        </svg>
+      </div>
+      <figcaption>Топология «звезда»: и админка, и любое число инженеров говорят только с одним центральным процессом; клиенты друг друга не видят и друг с другом не соединяются напрямую.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>Из чего состоит</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Компонент</th><th>Роль</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><b>/admin/</b></td><td>Панель ИТ: создать/изменить/удалить окно запрета, требует <code class="mono">X-API-Key</code>.</td></tr>
+          <tr><td><b>/status/</b></td><td>Страница инженера: цвет на весь экран, звук, системное уведомление, кнопка подтверждения. Без ключа — доступна всем.</td></tr>
+          <tr><td><b>Журнал изменений</b></td><td>Кто создал/изменил/удалил окно запрета и когда — таблица <code class="mono">FreezeWindowAudit</code>, ничего не перезаписывается молча.</td></tr>
+          <tr><td><b>Журнал подтверждений</b></td><td>Кто нажал «Понял(а)» и когда — таблица <code class="mono">FreezeAck</code>, доказательство фактического предупреждения.</td></tr>
+          <tr><td><b>generate_cert.py</b></td><td>Самоподписанный TLS-сертификат для внутреннего хоста — трафик и API-ключ не идут открытым текстом.</td></tr>
+          <tr><td><b>run-service.bat</b></td><td>Автозапуск при загрузке ОС и автоперезапуск при сбое через Планировщик заданий Windows.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Надёжность</h2>
+    <p>Нагрузочный тест на дефолтной конфигурации вскрыл жёсткий обрыв: 60 одновременных запросов сервер держал за доли секунды, 61-й запрос и выше — почти все висли 30 секунд и падали по таймауту. Причина — стандартный пул соединений SQLAlchemy (5 + 10 overflow), выставленный неявно, а не осознанно.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Одновременных запросов</th><th>До правки пула</th><th>После правки пула</th></tr></thead>
+        <tbody>
+          <tr><td class="num">60</td><td>60/60, 0.37 с</td><td>60/60, 0.37 с</td></tr>
+          <tr><td class="num">61</td><td class="mono" style="color:var(--crit)">3/61 — отказ</td><td>200/200, 1.7 с</td></tr>
+          <tr><td class="num">2 000</td><td class="mono" style="color:var(--crit)">0/2000 — отказ</td><td class="mono" style="color:var(--ok)">2000/2000, 19.2 с</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>После правки — ни одного отказа вплоть до 2000 одновременных запросов, устойчивая пропускная способность ≈100+ запросов/сек. При штатном опросе раз в ~15 секунд это с запасом покрывает несколько тысяч одновременно работающих инженеров.</p>
+  </section>
+
+  <section>
+    <h2>Важность</h2>
+    <p>Это не просто удобство — это канал связи, на который полагаются при принятии решения «можно ли сейчас менять конфигурацию в проде». Ошибка здесь стоит инцидента, а не просто неудобства:</p>
+    <ul class="plain">
+      <li><strong>Однозначность вместо Slack/устных договорённостей.</strong> Один источник правды, который сам мигает и не даёт забыть, что запрет действует.</li>
+      <li><strong>Доказуемость.</strong> Журнал подтверждений и журнал изменений отвечают не «наверное, все знали», а «вот кто, что и когда».</li>
+      <li><strong>Соответствие требованиям ИБ.</strong> Ни один из трёх пунктов, из-за которых отклонили первую версию, здесь не воспроизведён.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Финансовая часть</h2>
+    <p>Прямых затрат на лицензии нет — весь стек (FastAPI, SQLModel, uvicorn, SQLite) распространяется свободно. Ключевая разница с прошлой версией — не в коде, а в том, где это крутится:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>Было (Railway)</th><th>Сейчас</th></tr></thead>
+        <tbody>
+          <tr><td>Хостинг</td><td>Облачный PaaS, тариф по использованию (у Railway открытые планы начинаются в районе $5–20/мес за лёгкую нагрузку)</td><td>Существующий внутренний сервер ИТ-отдела — предельные расходы на инфраструктуру ≈ 0</td></tr>
+          <tr><td>TLS-сертификат</td><td>—</td><td>Самоподписанный — $0. Сертификат внутреннего CA компании — обычно тоже $0, если такой CA уже есть</td></tr>
+          <tr><td>Обслуживание</td><td>Внешний провайдер</td><td>Время администратора компании — те же люди, что уже обслуживают внутренние сервисы</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:.92rem;color:var(--ink-soft)">Точную экономию в деньгах я не подставляю — она зависит от того, какой тариф Railway реально был подключён, и от внутренней стоимости часа администратора, которых у меня нет. Качественно эффект один: разовые трудозатраты на редизайн и настройку вместо постоянного счёта за облако.</p>
+  </section>
+
+  <section>
+    <h2>Что дальше</h2>
+    <ul class="checklist">
+      <li><span class="check-mark done">Готово</span><span class="txt"><b>Нагрузочное тестирование и правка пула соединений</b><span>Обрыв на 61 запросе устранён, держит 2000+ без отказов</span></span></li>
+      <li><span class="check-mark done">Готово</span><span class="txt"><b>Журнал изменений и подтверждений</b><span>Кто создал/изменил/удалил окно, кто подтвердил — с именами и временем</span></span></li>
+      <li><span class="check-mark done">Готово</span><span class="txt"><b>Скрипты автозапуска и логирования</b><span><code class="mono">run-service.bat</code> + шаблон задачи Планировщика с автоперезапуском</span></span></li>
+      <li><span class="check-mark todo">Осталось</span><span class="txt"><b>Регистрация задачи в Планировщике на боевой машине</b><span>Команда подготовлена, выполняется вручную администратором</span></span></li>
+      <li><span class="check-mark todo">Осталось</span><span class="txt"><b>Открыть порт в брандмауэре и выпустить сертификат под реальное имя сервера</b><span>Нужно, чтобы страницу статуса видели машины инженеров, а не только localhost</span></span></li>
+      <li><span class="check-mark todo">Осталось</span><span class="txt"><b>Личная аутентификация вместо общего API-ключа</b><span>Сейчас «кем сделано» — самоотчёт в текстовом поле, не проверяется сервером</span></span></li>
+    </ul>
+  </section>
+
+  <footer>
+    <span>github.com/adbeka/freeze-notifier · ветка main</span>
+    <span class="mono">FastAPI 0.115 · SQLModel 0.0.39 · uvicorn 0.30.6</span>
+  </footer>
+
+</article>
+</body>
+</html>
