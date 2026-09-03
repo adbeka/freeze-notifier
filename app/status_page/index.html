@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Статус сети</title>
+<link id="favicon" rel="icon" href="">
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    text-align: center;
+    padding: 2rem;
+    transition: background-color 0.3s ease;
+    background: #2e7d32; /* ok = green */
+    color: #fff;
+  }
+  body.active { background: #b71c1c; }
+  body.active.blink { background: #e53935; }
+  body.unreachable { background: #8a6100; }
+  body.unreachable.blink { background: #b8860b; }
+
+  h1 { font-size: clamp(1.8rem, 5vw, 3.2rem); margin: 0 0 0.5rem; }
+  p.detail { font-size: clamp(1rem, 2.5vw, 1.4rem); margin: 0.25rem 0; opacity: 0.95; }
+  .meta { margin-top: 2rem; font-size: 0.85rem; opacity: 0.7; }
+
+  #enableNotif {
+    margin-top: 1.5rem;
+    padding: 10px 18px;
+    font-size: 0.95rem;
+    border: none;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+    cursor: pointer;
+  }
+  #enableNotif:hover { background: rgba(255,255,255,0.25); }
+  #enableNotif.hidden { display: none; }
+
+  #ackBox {
+    margin-top: 2rem;
+    padding: 1.2rem;
+    background: rgba(0,0,0,0.2);
+    border-radius: 10px;
+    display: none;
+  }
+  #ackBox.visible { display: block; }
+  #ackBox input {
+    padding: 8px 10px;
+    font-size: 1rem;
+    border-radius: 6px;
+    border: none;
+    margin-right: 8px;
+  }
+  #ackBox button {
+    padding: 9px 20px;
+    font-size: 1rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 6px;
+    background: #fff;
+    color: #b71c1c;
+    cursor: pointer;
+  }
+  #ackBox button:disabled { opacity: 0.6; cursor: default; }
+  #ackStatus { margin-top: 0.6rem; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+  <h1 id="title">Проверка статуса...</h1>
+  <p class="detail" id="detail"></p>
+  <button id="enableNotif" class="hidden">Включить системные уведомления</button>
+
+  <div id="ackBox">
+    <div>
+      <input id="ackName" type="text" placeholder="Ваше имя">
+      <button id="ackBtn">Понял(а), не буду вносить изменения</button>
+    </div>
+    <div id="ackStatus"></div>
+  </div>
+
+  <div class="meta" id="meta"></div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const segment = params.get("segment") || "";
+const POLL_MS = 15000;
+const POLL_JITTER_MS = 4000; // spreads out clients so a reconnect storm doesn't resynchronize their polls
+
+const titleEl = document.getElementById("title");
+const detailEl = document.getElementById("detail");
+const metaEl = document.getElementById("meta");
+const enableNotifBtn = document.getElementById("enableNotif");
+const ackBox = document.getElementById("ackBox");
+const ackBtn = document.getElementById("ackBtn");
+const ackNameInput = document.getElementById("ackName");
+const ackStatusEl = document.getElementById("ackStatus");
+
+const ACK_NAME_KEY = "freeze_ack_name";
+ackNameInput.value = localStorage.getItem(ACK_NAME_KEY) || "";
+
+let previousMode = "none"; // none | active | unreachable
+let blinkOn = false;
+let currentActiveWindowId = null;
+let ackedWindowIds = new Set(JSON.parse(localStorage.getItem("freeze_acked_ids") || "[]"));
+
+function setFavicon(color) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 32; canvas.height = 32;
+  const ctx = canvas.getContext("2d");
+  ctx.beginPath();
+  ctx.arc(16, 16, 14, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  document.getElementById("favicon").href = canvas.toDataURL("image/png");
+}
+
+function playBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.4);
+  } catch (e) { /* autoplay/audio blocked - visual+notification still work */ }
+}
+
+function notifyIfPermitted(title, body) {
+  if (typeof Notification === "undefined") return;
+  if (Notification.permission === "granted") {
+    try { new Notification(title, { body }); } catch (e) {}
+  }
+}
+
+if (typeof Notification !== "undefined" && Notification.permission === "default") {
+  enableNotifBtn.classList.remove("hidden");
+}
+enableNotifBtn.addEventListener("click", () => {
+  Notification.requestPermission().then(() => {
+    enableNotifBtn.classList.add("hidden");
+  });
+});
+
+function formatTime(iso) {
+  try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+  catch { return "?"; }
+}
+
+function saveAckedIds() {
+  localStorage.setItem("freeze_acked_ids", JSON.stringify(Array.from(ackedWindowIds)));
+}
+
+function renderAckBox(windowId) {
+  currentActiveWindowId = windowId;
+  if (ackedWindowIds.has(windowId)) {
+    ackBox.classList.remove("visible");
+    ackStatusEl.textContent = "";
+    return;
+  }
+  ackBox.classList.add("visible");
+  ackBtn.disabled = false;
+  ackBtn.textContent = "Понял(а), не буду вносить изменения";
+  ackStatusEl.textContent = "";
+}
+
+ackBtn.addEventListener("click", async () => {
+  if (!currentActiveWindowId) return;
+  const name = ackNameInput.value.trim();
+  localStorage.setItem(ACK_NAME_KEY, name);
+  ackBtn.disabled = true;
+  try {
+    const res = await fetch("/api/ack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ window_id: currentActiveWindowId, segment, acknowledged_by: name }),
+    });
+    if (!res.ok) throw new Error("status " + res.status);
+    ackedWindowIds.add(currentActiveWindowId);
+    saveAckedIds();
+    ackStatusEl.textContent = "Подтверждено в " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch (e) {
+    ackBtn.disabled = false;
+    ackStatusEl.textContent = "Не удалось отправить подтверждение, попробуйте ещё раз";
+  }
+});
+
+async function poll() {
+  let status;
+  try {
+    const url = "/api/status?segment=" + encodeURIComponent(segment);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("status " + res.status);
+    status = await res.json();
+  } catch (e) {
+    document.body.className = "unreachable" + (blinkOn ? " blink" : "");
+    setFavicon("#b8860b");
+    titleEl.textContent = "СТАТУС ЗАПРЕТА НЕ ПОДТВЕРЖДЁН";
+    detailEl.textContent = "Нет связи с сервером — проверьте вручную перед изменениями.";
+    document.title = "🟡 статус не подтверждён";
+    ackBox.classList.remove("visible");
+    previousMode = "unreachable";
+    return;
+  }
+
+  if (status.active && status.active_windows.length > 0) {
+    const w = status.active_windows[0];
+    const scope = w.scope_type === "full"
+      ? "Полный запрет по всей сети"
+      : "Частичный запрет: " + w.segments.join(", ");
+
+    document.body.className = "active" + (blinkOn ? " blink" : "");
+    setFavicon("#e53935");
+    titleEl.textContent = "ЗАПРЕТ КОНФИГУРАЦИЙ АКТИВЕН";
+    detailEl.textContent = scope + "  |  До " + formatTime(w.end_time) + (w.comment ? "  |  " + w.comment : "");
+    document.title = "🔴 ЗАПРЕТ АКТИВЕН";
+
+    renderAckBox(w.id);
+
+    if (previousMode !== "active") {
+      playBeep();
+      notifyIfPermitted("Запрет конфигураций активен", scope);
+    }
+    previousMode = "active";
+  } else {
+    document.body.className = "";
+    setFavicon("#2e7d32");
+    titleEl.textContent = "Запретов нет";
+    detailEl.textContent = "Последняя проверка: " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    document.title = "🟢 статус сети";
+    ackBox.classList.remove("visible");
+    previousMode = "none";
+  }
+}
+
+setInterval(() => {
+  blinkOn = !blinkOn;
+  if (document.body.classList.contains("active") || document.body.classList.contains("unreachable")) {
+    document.body.classList.toggle("blink", blinkOn);
+  }
+}, 600);
+
+function scheduleNextPoll() {
+  const delay = POLL_MS + (Math.random() * 2 - 1) * POLL_JITTER_MS;
+  setTimeout(async () => {
+    await poll();
+    scheduleNextPoll();
+  }, delay);
+}
+scheduleNextPoll();
+poll();
+
+metaEl.textContent = segment ? ("Сегмент: " + segment) : "Сегмент не задан (?segment=... в адресе страницы)";
+</script>
+</body>
+</html>

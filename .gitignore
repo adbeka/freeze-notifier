@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+*.pyc
+freeze.db
+local.env.bat
+server.log

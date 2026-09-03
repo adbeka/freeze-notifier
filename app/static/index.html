@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Окна запрета конфигураций</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { border: 1px solid #ccc; padding: 6px 8px; font-size: 0.9rem; text-align: left; }
+  th { background: #f2f2f2; }
+  tr.active { background: #ffe5e5; }
+  tr.upcoming { background: #fff8e0; }
+  form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 1.5rem; border: 1px solid #ddd; padding: 1rem; border-radius: 6px; }
+  form label { display: flex; flex-direction: column; font-size: 0.85rem; gap: 2px; }
+  form .full-row { grid-column: 1 / -1; }
+  input, select, textarea { font-size: 0.95rem; padding: 4px; }
+  button { padding: 6px 12px; cursor: pointer; }
+  .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 1rem; }
+  .err { color: #b00020; font-size: 0.85rem; }
+  .del-btn { color: #b00020; background: none; border: none; cursor: pointer; text-decoration: underline; }
+  .segments-box { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 6px 0; }
+  .segments-box label { flex-direction: row !important; align-items: center; gap: 6px !important; font-size: 0.95rem !important; }
+  .segments-box input[type="checkbox"] { width: auto; padding: 0; }
+</style>
+</head>
+<body>
+<h1>Окна запрета конфигураций</h1>
+
+<div class="toolbar">
+  <label>API key:
+    <input id="apiKey" type="password" placeholder="X-API-Key">
+  </label>
+  <button id="refreshBtn">Обновить</button>
+</div>
+
+<table id="windowsTable">
+  <thead>
+    <tr><th>Тип</th><th>Сегменты</th><th>Начало</th><th>Конец</th><th>Комментарий</th><th>Автор</th><th></th></tr>
+  </thead>
+  <tbody id="windowsBody"></tbody>
+</table>
+
+<form id="windowForm">
+  <input type="hidden" id="editId">
+  <label>Тип запрета
+    <select id="scopeType">
+      <option value="full">Полный (вся сеть)</option>
+      <option value="partial">Частичный (по сегментам)</option>
+    </select>
+  </label>
+  <label class="full-row">Сегменты (только для частичного запрета)
+    <div class="segments-box" id="segmentsBox"></div>
+  </label>
+  <label>Начало
+    <input id="startTime" type="datetime-local">
+  </label>
+  <label>Конец
+    <input id="endTime" type="datetime-local">
+  </label>
+  <label class="full-row">Комментарий
+    <textarea id="comment" rows="2" placeholder="Причина / номер заявки на изменение"></textarea>
+  </label>
+  <label>Автор
+    <input id="createdBy" placeholder="ваше имя">
+  </label>
+  <div class="full-row">
+    <button type="submit">Сохранить окно</button>
+    <button type="button" id="cancelEdit" style="display:none">Отменить редактирование</button>
+    <span class="err" id="formErr"></span>
+  </div>
+</form>
+
+<script>
+// Реальные сегменты/подразделения сети - держите этот список в актуальном
+// состоянии, чтобы ИТ не мог опечататься в имени сегмента при создании
+// частичного запрета (имя должно точно совпадать с ?segment=... в ссылке
+// инженера).
+const KNOWN_SEGMENTS = ["dept-ro", "dc-almaty", "core-network"];
+
+const segmentsBox = document.getElementById("segmentsBox");
+for (const seg of KNOWN_SEGMENTS) {
+  const label = document.createElement("label");
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.value = seg;
+  cb.name = "segment";
+  label.appendChild(cb);
+  label.appendChild(document.createTextNode(seg));
+  segmentsBox.appendChild(label);
+}
+
+function getCheckedSegments() {
+  return Array.from(segmentsBox.querySelectorAll("input[type=checkbox]:checked")).map(cb => cb.value);
+}
+
+function setCheckedSegments(segments) {
+  segmentsBox.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+    cb.checked = segments.includes(cb.value);
+  });
+}
+
+const API_KEY_STORAGE = "freeze_admin_api_key";
+document.getElementById("apiKey").value = localStorage.getItem(API_KEY_STORAGE) || "";
+document.getElementById("apiKey").addEventListener("change", (e) => {
+  localStorage.setItem(API_KEY_STORAGE, e.target.value);
+});
+
+function apiKey() { return document.getElementById("apiKey").value; }
+
+function toLocalInputValue(iso) {
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function addCell(row, text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  row.appendChild(td);
+  return td;
+}
+
+async function loadWindows() {
+  const res = await fetch("/api/windows");
+  const windows = await res.json();
+  const now = new Date();
+  const body = document.getElementById("windowsBody");
+  body.innerHTML = "";
+  for (const w of windows) {
+    const start = new Date(w.start_time);
+    const end = new Date(w.end_time);
+    const tr = document.createElement("tr");
+    if (now >= start && now <= end) tr.className = "active";
+    else if (now < start) tr.className = "upcoming";
+
+    // comment/created_by - произвольный текст от ИТ-администратора, не HTML.
+    // textContent, а не innerHTML, чтобы <img onerror=...> и подобное не
+    // выполнялось в браузере другого администратора, который откроет список.
+    addCell(tr, w.scope_type === "full" ? "Полный" : "Частичный");
+    addCell(tr, w.segments.join(", ") || "—");
+    addCell(tr, start.toLocaleString());
+    addCell(tr, end.toLocaleString());
+    addCell(tr, w.comment || "");
+    addCell(tr, w.created_by || "");
+
+    const actionsTd = document.createElement("td");
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "✎";
+    editBtn.dataset.edit = w.id;
+    const delBtn = document.createElement("button");
+    delBtn.className = "del-btn";
+    delBtn.textContent = "удалить";
+    delBtn.dataset.del = w.id;
+    actionsTd.appendChild(editBtn);
+    actionsTd.appendChild(delBtn);
+    tr.appendChild(actionsTd);
+
+    body.appendChild(tr);
+  }
+  body.querySelectorAll("[data-edit]").forEach((btn) => {
+    btn.addEventListener("click", () => startEdit(windows.find(w => w.id == btn.dataset.edit)));
+  });
+  body.querySelectorAll("[data-del]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteWindow(btn.dataset.del));
+  });
+}
+
+function startEdit(w) {
+  document.getElementById("editId").value = w.id;
+  document.getElementById("scopeType").value = w.scope_type;
+  setCheckedSegments(w.segments);
+  document.getElementById("startTime").value = toLocalInputValue(w.start_time);
+  document.getElementById("endTime").value = toLocalInputValue(w.end_time);
+  document.getElementById("comment").value = w.comment;
+  document.getElementById("createdBy").value = w.created_by;
+  document.getElementById("cancelEdit").style.display = "inline-block";
+}
+
+function resetForm() {
+  document.getElementById("windowForm").reset();
+  document.getElementById("editId").value = "";
+  document.getElementById("cancelEdit").style.display = "none";
+  document.getElementById("formErr").textContent = "";
+}
+
+document.getElementById("cancelEdit").addEventListener("click", resetForm);
+
+async function deleteWindow(id) {
+  if (!confirm("Удалить это окно запрета?")) return;
+  const res = await fetch(`/api/windows/${id}`, {
+    method: "DELETE",
+    headers: { "X-API-Key": apiKey() },
+  });
+  if (!res.ok) { alert("Ошибка удаления: " + res.status); return; }
+  loadWindows();
+}
+
+document.getElementById("windowForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById("formErr");
+  errEl.textContent = "";
+
+  const startRaw = document.getElementById("startTime").value;
+  const endRaw = document.getElementById("endTime").value;
+  if (!startRaw || !endRaw) {
+    errEl.textContent = "Заполните начало и конец окна запрета.";
+    return;
+  }
+  const startDate = new Date(startRaw);
+  const endDate = new Date(endRaw);
+  if (isNaN(startDate) || isNaN(endDate)) {
+    errEl.textContent = "Некорректная дата/время.";
+    return;
+  }
+  if (endDate <= startDate) {
+    errEl.textContent = "Конец должен быть позже начала.";
+    return;
+  }
+
+  const payload = {
+    scope_type: document.getElementById("scopeType").value,
+    segments: getCheckedSegments(),
+    start_time: startDate.toISOString(),
+    end_time: endDate.toISOString(),
+    comment: document.getElementById("comment").value,
+    created_by: document.getElementById("createdBy").value,
+  };
+
+  const editId = document.getElementById("editId").value;
+  const url = editId ? `/api/windows/${editId}` : "/api/windows";
+  const method = editId ? "PUT" : "POST";
+
+  const res = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json", "X-API-Key": apiKey() },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    errEl.textContent = "Ошибка: " + (body.detail ? JSON.stringify(body.detail) : res.status);
+    return;
+  }
+
+  resetForm();
+  loadWindows();
+});
+
+document.getElementById("refreshBtn").addEventListener("click", loadWindows);
+loadWindows();
+setInterval(loadWindows, 15000);
+</script>
+</body>
+</html>
